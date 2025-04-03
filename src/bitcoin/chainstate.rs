@@ -52,18 +52,14 @@ impl ChainStateKey {
     }
 }
 
-#[derive(Debug)]
-pub struct ChainStateValue(Vec<u8>);
+pub fn deobfuscate_value(value: &[u8], obfuscation_key: &[u8]) -> Vec<u8> {
+    if obfuscation_key.is_empty() {
+        return value.to_vec();
+    }
 
-impl ChainStateValue {
-    pub fn new(data: Vec<u8>) -> Self {
-        Self(data)
+    let mut result = Vec::with_capacity(value.len());
+    for (i, &b) in value.iter().enumerate() {
+        result.push(b ^ obfuscation_key[i % obfuscation_key.len()]);
     }
-    pub fn deobfuscate(&self, key: &[u8]) -> Vec<u8> {
-        self.0
-            .iter()
-            .zip(key.iter().cycle())
-            .map(|(a, b)| a ^ b)
-            .collect()
-    }
+    result
 }

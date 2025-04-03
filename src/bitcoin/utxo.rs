@@ -34,7 +34,7 @@ impl fmt::Display for ScriptType {
 pub struct UtxoValue {
     pub height: u32,
     pub coinbase: bool,
-    pub amount: i64,
+    pub amount: u64,
     pub script_type: u64, // nsize
     pub script: Vec<u8>,
 }
@@ -79,7 +79,7 @@ impl UtxoValue {
         Ok(Self {
             height: height as u32,
             coinbase,
-            amount,
+            amount: amount as u64,
             script_type: script_type as u64,
             script,
         })

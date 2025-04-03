@@ -48,6 +48,23 @@ pub struct Cli {
     #[arg(
         short,
         long,
+        help = "Sums totals for each address. If used, the --fields option is ignored.",
+        default_value = "false"
+    )]
+    pub address_totals: bool,
+
+    #[arg(
+        short,
+        long,
+        value_name = "PREFIX",
+        default_value = "",
+        help = "Used with --address-totals. Only include UTXOs for addresses starting with this prefix."
+    )]
+    pub prefix: String,
+
+    #[arg(
+        short,
+        long,
         value_name = "FIELDS",
         default_value = "count,txid,vout,amount,type,address",
         help = "Comma-separated list of fields to include in output: count,txid,vout,height,coinbase,amount,nsize,script,type,address"
