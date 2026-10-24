@@ -9,15 +9,18 @@ use secp256k1::PublicKey;
 /// nsize == 5: Y coordinate is odd
 pub fn decompress_public_key(compressed: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     if compressed.len() < 33 {
-        return Err(anyhow!("Compressed pubkey too short: {} bytes", compressed.len()));
+        return Err(anyhow!(
+            "Compressed pubkey too short: {} bytes",
+            compressed.len()
+        ));
     }
 
     // Create a compressed public key in format: 02/03 || x
-    let mut compressed_key = Vec::with_capacity(33);
+    let mut compressed_key = [0; 33];
     // 0x05 means odd Y, use 0x03 prefix. 0x04 means even Y, use 0x02 prefix
-    compressed_key.push(if compressed[0] == 0x05 { 0x03 } else { 0x02 });
-    compressed_key.extend_from_slice(&compressed[1..33]);
+    compressed_key[0] = if compressed[0] == 0x05 { 0x03 } else { 0x02 };
+    compressed_key[1..].copy_from_slice(&compressed[1..33]);
 
-    let pubkey = PublicKey::from_slice(&compressed_key)?;
+    let pubkey = PublicKey::from_byte_array_compressed(compressed_key)?;
     Ok(pubkey.serialize_uncompressed().to_vec())
 }

@@ -1,8 +1,11 @@
+use anyhow::{ensure, Context};
+use std::borrow::Cow;
 use std::fmt;
 
-use super::address::{hash160_to_address, public_key_to_address, segwit_address};
-use super::btc_leveldb::{decompress_value, varint128_decode, varint128_read};
+use super::address::{public_key_hash160, AddressPayload};
+use super::btc_leveldb::{decompress_amount, read_varint};
 use super::pubkey::decompress_public_key;
+use super::script::is_multisig;
 
 #[derive(Debug, PartialEq)]
 pub enum ScriptType {
@@ -31,77 +34,81 @@ impl fmt::Display for ScriptType {
     }
 }
 
-pub struct UtxoValue {
+pub struct UtxoValue<'a> {
     pub height: u32,
     pub coinbase: bool,
     pub amount: u64,
-    pub script_type: u64, // nsize
-    pub script: Vec<u8>,
+    /// Compressed script tag (0..=5), or uncompressed script length plus six.
+    pub nsize: u64,
+    pub script: Cow<'a, [u8]>,
 }
 
-impl UtxoValue {
-    pub fn parse(data: &[u8], need_decompression: bool) -> Result<Self, anyhow::Error> {
-        let mut offset = 0;
+impl<'a> UtxoValue<'a> {
+    pub fn parse(data: &'a [u8], need_decompression: bool) -> Result<Self, anyhow::Error> {
+        let mut remaining = data;
 
-        // First varint (height and coinbase)
-        let (bytes_read, varint) = varint128_read(data, offset);
-        offset += bytes_read;
-        let varint_decoded = varint128_decode(&varint);
+        // Height and coinbase share the first VARINT.
+        let height_and_coinbase =
+            read_varint(&mut remaining).context("Invalid UTXO height/coinbase")?;
+        let height = u32::try_from(height_and_coinbase >> 1).context("UTXO height exceeds u32")?;
+        let coinbase = height_and_coinbase & 1 != 0;
 
-        // Extract height and coinbase from first varint
-        let height = varint_decoded >> 1; // Remove last bit
-        let coinbase = (varint_decoded & 1) == 1; // Last bit indicates coinbase
+        // The second VARINT stores the compressed satoshi amount.
+        let compressed_amount = read_varint(&mut remaining).context("Invalid UTXO amount")?;
+        let amount = decompress_amount(compressed_amount)?;
 
-        // Second varint (amount)
-        let (bytes_read, varint) = varint128_read(data, offset);
-        offset += bytes_read;
-        let compressed_amount = varint128_decode(&varint);
-        let amount = decompress_value(compressed_amount);
+        // The final VARINT determines the script encoding and payload size.
+        let script_encoding = remaining;
+        let nsize = read_varint(&mut remaining).context("Invalid UTXO script size")?;
 
-        // Third varint (script type/size)
-        let (bytes_read, varint) = varint128_read(data, offset);
-        offset += bytes_read;
-        let script_type = varint128_decode(&varint);
+        let expected_size = match nsize {
+            0 | 1 => 20,
+            2..=5 => 32,
+            size => usize::try_from(size - 6).context("UTXO script size exceeds usize")?,
+        };
+        ensure!(
+            remaining.len() == expected_size,
+            "Invalid UTXO script length: expected {}, got {}",
+            expected_size,
+            remaining.len()
+        );
 
-        // Adjust offset for certain script types (2-5 are P2PK variants)
-        if (1 < script_type) && (script_type < 6) {
-            offset -= 1;
-        }
+        // P2PK tags are single bytes that also serve as the public key prefix.
+        let script_bytes = if (2..=5).contains(&nsize) {
+            script_encoding
+        } else {
+            remaining
+        };
 
-        // Get remaining bytes as script
-        let mut script = data[offset..].to_vec();
-
-        // Only decompress if needed for script output or address generation
-        if need_decompression && (script_type == 4 || script_type == 5) {
-            script = decompress_public_key(&script)?;
-        }
+        // Most scripts can borrow their bytes; expanded public keys need owned storage.
+        let script = if need_decompression && (nsize == 4 || nsize == 5) {
+            Cow::Owned(decompress_public_key(script_bytes)?)
+        } else {
+            Cow::Borrowed(script_bytes)
+        };
 
         Ok(Self {
-            height: height as u32,
+            height,
             coinbase,
-            amount: amount as u64,
-            script_type: script_type as u64,
+            amount,
+            nsize,
             script,
         })
     }
 
     pub fn get_script_type(&self) -> ScriptType {
-        match self.script_type {
+        match self.nsize {
             0 => ScriptType::P2PKH,
             1 => ScriptType::P2SH,
             2..=5 => ScriptType::P2PK,
-            _ if !self.script.is_empty() && self.script[self.script.len() - 1] == 174 => {
-                ScriptType::P2MS
-            }
-            28 if self.script.len() >= 2 && self.script[0] == 0 && self.script[1] == 20 => {
+            28 if self.script.len() == 22 && self.script.starts_with(&[0, 20]) => {
                 ScriptType::P2WPKH
             }
-            40 if self.script.len() >= 2 && self.script[0] == 0 && self.script[1] == 32 => {
-                ScriptType::P2WSH
-            }
-            40 if self.script.len() >= 2 && self.script[0] == 0x51 && self.script[1] == 32 => {
+            40 if self.script.len() == 34 && self.script.starts_with(&[0, 32]) => ScriptType::P2WSH,
+            40 if self.script.len() == 34 && self.script.starts_with(&[0x51, 32]) => {
                 ScriptType::P2TR
             }
+            _ if is_multisig(&self.script) => ScriptType::P2MS,
             _ => ScriptType::NonStandard,
         }
     }
@@ -112,27 +119,26 @@ impl UtxoValue {
         testnet: bool,
         p2pk_addresses: bool,
     ) -> Option<String> {
+        self.address_payload(script_type, p2pk_addresses)?
+            .encode(testnet)
+            .ok()
+    }
+
+    pub(crate) fn address_payload(
+        &self,
+        script_type: ScriptType,
+        p2pk_addresses: bool,
+    ) -> Option<AddressPayload> {
+        let script = self.script.as_ref();
         match script_type {
-            ScriptType::P2PKH => {
-                let prefix = if testnet { 0x6f } else { 0x00 };
-                Some(hash160_to_address(&self.script, prefix))
-            }
-            ScriptType::P2SH => {
-                let prefix = if testnet { 0xc4 } else { 0x05 };
-                Some(hash160_to_address(&self.script, prefix))
-            }
+            ScriptType::P2PKH => Some(AddressPayload::P2PKH(script.try_into().ok()?)),
+            ScriptType::P2SH => Some(AddressPayload::P2SH(script.try_into().ok()?)),
             ScriptType::P2PK if p2pk_addresses => {
-                let prefix = if testnet { 0x6f } else { 0x00 };
-                Some(public_key_to_address(&self.script, prefix))
+                Some(AddressPayload::P2PKH(public_key_hash160(script)))
             }
-            ScriptType::P2WPKH | ScriptType::P2WSH | ScriptType::P2TR => {
-                let version = if matches!(script_type, ScriptType::P2TR) {
-                    1
-                } else {
-                    0
-                };
-                segwit_address(version, &self.script[2..], testnet).ok()
-            }
+            ScriptType::P2WPKH => Some(AddressPayload::P2WPKH(script.get(2..)?.try_into().ok()?)),
+            ScriptType::P2WSH => Some(AddressPayload::P2WSH(script.get(2..)?.try_into().ok()?)),
+            ScriptType::P2TR => Some(AddressPayload::P2TR(script.get(2..)?.try_into().ok()?)),
             _ => None,
         }
     }

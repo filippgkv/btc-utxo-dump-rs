@@ -1,55 +1,58 @@
-pub fn varint128_read(data: &[u8], offset: usize) -> (usize, Vec<u8>) {
-    let mut result = Vec::new();
-    // Loop through bytes starting from offset
-    for &byte in data[offset..].iter() {
-        result.push(byte);
-        // Check if 8th bit is set (& 0b10000000)
+use anyhow::{ensure, Context, Result};
+
+/// Read Bitcoin Core's MSB base-128 VARINT, advancing the input slice.
+/// Continuation bytes add one to the accumulated value; this is not LEB128.
+pub fn read_varint(input: &mut &[u8]) -> Result<u64> {
+    let mut value = 0u64;
+
+    loop {
+        let byte = *input.first().context("Truncated VARINT")?;
+        *input = &input[1..];
+
+        // Make room for the next seven bits without discarding existing bits.
+        ensure!(value <= u64::MAX >> 7, "VARINT exceeds u64");
+        value = (value << 7) | u64::from(byte & 0x7f);
+
         if byte & 0x80 == 0 {
-            // Found byte without 8th bit set, return count and bytes
-            return (result.len(), result);
+            return Ok(value);
         }
+
+        // Core's encoding adds one for each continuation byte.
+        ensure!(value < u64::MAX, "VARINT exceeds u64");
+        value += 1;
     }
-    // Return empty result if we couldn't read properly
-    (0, result)
 }
 
-pub fn varint128_decode(bytes: &[u8]) -> i64 {
-    let mut n: i64 = 0;
-    for &byte in bytes {
-        // 1. Shift left 7 bits
-        n <<= 7;
-        // 2. Set last 7 bits from current byte
-        n |= i64::from(byte & 0x7F);
-        // 3. Add 1 if continuation bit (8th bit) is set
-        if byte & 0x80 != 0 {
-            n += 1;
-        }
-    }
-    n
-}
-
-pub fn decompress_value(x: i64) -> i64 {
-    if x == 0 {
-        return 0;
+pub fn decompress_amount(compressed: u64) -> Result<u64> {
+    if compressed == 0 {
+        return Ok(0);
     }
 
-    let mut n = x - 1; // subtract 1 first
-    let e = n % 10; // remainder mod 10
-    n /= 10; // quotient mod 10
+    // The last decimal digit stores the number of trailing zeroes.
+    let value = compressed - 1;
+    let exponent = value % 10;
+    let mantissa = value / 10;
 
-    if e < 9 {
-        let d = n % 9; // remainder mod 9
-        n /= 9; // quotient mod 9
-        n = n * 10 + d + 1;
+    let mut amount;
+    if exponent < 9 {
+        // Restore the nonzero digit removed during compression.
+        let last_digit = mantissa % 9 + 1;
+        amount = (mantissa / 9)
+            .checked_mul(10)
+            .context("Decompressed amount exceeds u64")?;
+        amount = amount
+            .checked_add(last_digit)
+            .context("Decompressed amount exceeds u64")?;
     } else {
-        n = n + 1;
+        amount = mantissa
+            .checked_add(1)
+            .context("Decompressed amount exceeds u64")?;
     }
 
-    // Calculate 10^e
-    let mut result = n;
-    for _ in 0..e {
-        result *= 10;
+    for _ in 0..exponent {
+        amount = amount
+            .checked_mul(10)
+            .context("Decompressed amount exceeds u64")?;
     }
-
-    result
+    Ok(amount)
 }

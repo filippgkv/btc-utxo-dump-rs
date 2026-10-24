@@ -1,6 +1,6 @@
 # Bitcoin UTXO Dump (Rust)
 
-A Rust port of [bitcoin-utxo-dump](https://github.com/in3rsha/bitcoin-utxo-dump) - 
+A Rust port of [bitcoin-utxo-dump](https://github.com/in3rsha/bitcoin-utxo-dump) -
 a tool to get a list of every unspent bitcoin in the blockchain.
 
 **Warning:** The original tool had the possibility of corrupting the chainstate database.
@@ -31,10 +31,15 @@ First, ensure you have a full copy of the blockchain
 Then, with Rust installed, you can build the tool:
 
 ```bash
-cargo build --release
+cargo build --release --locked
 ```
 
 This will compile the program into `target/release/btc-utxo-dump-rs`
+
+`Cargo.lock` preserves the tested dependency versions. In particular, `cmake`
+0.1.54 and `cc` 1.2.17 are retained because newer build dependencies cause the
+bundled LevelDB build to enable the unsupported `-Wthread-safety` flag with GCC.
+Preserve these versions when updating dependencies.
 
 ## Usage
 
@@ -129,4 +134,4 @@ $ # no output shows files are identical
 ## Requirements
 
 - Bitcoin Core 0.15.1 or later
-- Tested with Rust 1.84.1
+- Rust 1.88 or later (tested with Rust 1.98.1)

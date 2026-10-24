@@ -1,23 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-use super::fields::{
-    FIELD_ADDRESS, FIELD_AMOUNT, FIELD_COINBASE, FIELD_COUNT, FIELD_HEIGHT, FIELD_NSIZE,
-    FIELD_SCRIPT, FIELD_TXID, FIELD_TYPE, FIELD_VOUT,
-};
-
-const VALID_FIELDS: [&str; 10] = [
-    FIELD_COUNT,
-    FIELD_TXID,
-    FIELD_VOUT,
-    FIELD_HEIGHT,
-    FIELD_COINBASE,
-    FIELD_AMOUNT,
-    FIELD_NSIZE,
-    FIELD_SCRIPT,
-    FIELD_TYPE,
-    FIELD_ADDRESS,
-];
+use super::fields::FieldSelection;
 
 #[derive(Parser)]
 #[command(
@@ -26,7 +10,7 @@ const VALID_FIELDS: [&str; 10] = [
     version,
     author
 )]
-pub struct Cli {
+struct RawCli {
     #[arg(
         short,
         long,
@@ -34,7 +18,7 @@ pub struct Cli {
         default_value = "~/.bitcoin/chainstate/",
         help = "Bitcoin Core chainstate LevelDB directory"
     )]
-    pub db: PathBuf,
+    db: PathBuf,
 
     #[arg(
         short,
@@ -43,7 +27,7 @@ pub struct Cli {
         default_value = "utxodump.csv",
         help = "Output CSV file path"
     )]
-    pub output: PathBuf,
+    output: PathBuf,
 
     #[arg(
         short,
@@ -51,7 +35,7 @@ pub struct Cli {
         help = "Sums totals for each address. If used, the --fields option is ignored.",
         default_value = "false"
     )]
-    pub address_totals: bool,
+    address_totals: bool,
 
     #[arg(
         short,
@@ -60,7 +44,7 @@ pub struct Cli {
         default_value = "",
         help = "Used with --address-totals. Only include UTXOs for addresses starting with this prefix."
     )]
-    pub prefix: String,
+    prefix: String,
 
     #[arg(
         short,
@@ -69,10 +53,10 @@ pub struct Cli {
         default_value = "count,txid,vout,amount,type,address",
         help = "Comma-separated list of fields to include in output: count,txid,vout,height,coinbase,amount,nsize,script,type,address"
     )]
-    pub fields: String,
+    fields: String,
 
     #[arg(long, help = "Use testnet network parameters", default_value = "false")]
-    pub testnet: bool,
+    testnet: bool,
 
     #[arg(
         short,
@@ -80,7 +64,7 @@ pub struct Cli {
         help = "Print UTXOs to stdout while processing",
         default_value = "false"
     )]
-    pub verbose: bool,
+    verbose: bool,
 
     #[arg(
         short,
@@ -89,32 +73,62 @@ pub struct Cli {
         default_value = "0",
         help = "Maximum number of UTXOs to process (0 for unlimited)"
     )]
-    pub max_utxos: u64,
+    max_utxos: u64,
 
     #[arg(short, long, help = "Quiet mode, no output", default_value = "false")]
-    pub quiet: bool,
+    quiet: bool,
 
     #[arg(
         long,
         help = "Convert P2PK scripts to addresses",
         default_value = "false"
     )]
+    include_p2pk: bool,
+}
+
+pub struct Cli {
+    pub db: PathBuf,
+    pub output: PathBuf,
+    pub address_totals: bool,
+    pub prefix: String,
+    pub fields: FieldSelection,
+    pub testnet: bool,
+    pub verbose: bool,
+    pub max_utxos: u64,
+    pub quiet: bool,
     pub include_p2pk: bool,
 }
 
 impl Cli {
-    pub fn validate(&self) -> anyhow::Result<()> {
-        for field in self.fields.split(',') {
-            if !VALID_FIELDS.contains(&field.trim()) {
-                anyhow::bail!("Invalid field: {}", field);
-            }
-        }
-        Ok(())
+    fn from_raw(raw: RawCli) -> anyhow::Result<Self> {
+        let fields = if raw.address_totals {
+            FieldSelection::default()
+        } else {
+            raw.fields.parse()?
+        };
+        Ok(Self {
+            db: raw.db,
+            output: raw.output,
+            address_totals: raw.address_totals,
+            prefix: raw.prefix,
+            fields,
+            testnet: raw.testnet,
+            verbose: raw.verbose,
+            max_utxos: raw.max_utxos,
+            quiet: raw.quiet,
+            include_p2pk: raw.include_p2pk,
+        })
+    }
+
+    pub fn try_parse_from<I, T>(arguments: I) -> anyhow::Result<Self>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        Self::from_raw(RawCli::try_parse_from(arguments)?)
     }
 }
 
 pub fn parse_cli() -> anyhow::Result<Cli> {
-    let cli = Cli::parse();
-    cli.validate()?;
-    Ok(cli)
+    Cli::from_raw(RawCli::parse())
 }

@@ -1,41 +1,56 @@
-use bitcoin_bech32::constants::Network;
-use bitcoin_bech32::{self, u5, WitnessProgram};
+use anyhow::Context;
+use bech32::{hrp, segwit, Fe32};
 use bs58;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 
-const TESTNET: Network = Network::Testnet;
-const MAINNET: Network = Network::Bitcoin;
-
-pub fn hash160_to_address(hash: &[u8], prefix: u8) -> String {
-    // Pre-allocate with exact capacity to avoid reallocations
-    let mut address = Vec::with_capacity(1 + hash.len() + 4);
-    address.push(prefix);
-    address.extend_from_slice(hash);
+pub fn hash160_to_address(hash: &[u8; 20], prefix: u8) -> String {
+    let mut address = [0; 25];
+    address[0] = prefix;
+    address[1..21].copy_from_slice(hash);
     // Calculate double SHA256
-    let checksum = Sha256::digest(&Sha256::digest(&address)[..]);
+    let hash = Sha256::digest(&address[..21]);
+    let checksum = Sha256::digest(hash);
     // Append checksum
-    address.extend_from_slice(&checksum[..4]);
+    address[21..].copy_from_slice(&checksum[..4]);
     // Convert to base58
     bs58::encode(address).into_string()
 }
 
 pub fn public_key_to_address(pubkey: &[u8], prefix: u8) -> String {
-    // Perform SHA256 and RIPEMD160
-    let hash160 = Ripemd160::digest(&Sha256::digest(pubkey));
+    let hash160 = public_key_hash160(pubkey);
     hash160_to_address(&hash160, prefix)
 }
 
-pub fn segwit_address(
-    version: u8,
-    program: &[u8],
-    testnet: bool,
-) -> Result<String, bitcoin_bech32::Error> {
-    let network = if testnet { TESTNET } else { MAINNET };
+pub(crate) fn public_key_hash160(pubkey: &[u8]) -> [u8; 20] {
+    Ripemd160::digest(Sha256::digest(pubkey)).into()
+}
 
-    let version =
-        u5::try_from_u8(version).map_err(|_| bitcoin_bech32::Error::InvalidScriptVersion)?;
+/// Address identity before network prefixes and text encoding are applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum AddressPayload {
+    P2PKH([u8; 20]),
+    P2SH([u8; 20]),
+    P2WPKH([u8; 20]),
+    P2WSH([u8; 32]),
+    P2TR([u8; 32]),
+}
 
-    let witness_program = WitnessProgram::new(version, program.to_vec(), network)?;
-    Ok(witness_program.to_address())
+impl AddressPayload {
+    pub(crate) fn encode(self, testnet: bool) -> anyhow::Result<String> {
+        match self {
+            Self::P2PKH(hash) => Ok(hash160_to_address(&hash, if testnet { 0x6f } else { 0x00 })),
+            Self::P2SH(hash) => Ok(hash160_to_address(&hash, if testnet { 0xc4 } else { 0x05 })),
+            Self::P2WPKH(program) => segwit_address(0, &program, testnet),
+            Self::P2WSH(program) => segwit_address(0, &program, testnet),
+            Self::P2TR(program) => segwit_address(1, &program, testnet),
+        }
+    }
+}
+
+pub fn segwit_address(version: u8, program: &[u8], testnet: bool) -> anyhow::Result<String> {
+    let network = if testnet { hrp::TB } else { hrp::BC };
+    let version = Fe32::try_from(version).context("Invalid witness version")?;
+
+    Ok(segwit::encode(network, version, program)?)
 }
