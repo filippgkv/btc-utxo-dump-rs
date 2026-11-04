@@ -327,13 +327,16 @@ fn output_creation_failure_returns_a_nonzero_exit_status() {
 #[test]
 fn final_buffer_flush_failure_returns_a_nonzero_exit_status() {
     let fixture = TestDatabase::new(true);
-    // These rows fit in the CSV buffer; /dev/full fails when main flushes it.
-    let output = dump_command(&fixture.database_path, Path::new("/dev/full"))
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("No space left on device"));
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("Total UTXOs"));
+    for addresses_only in [false, true] {
+        let mut command = dump_command(&fixture.database_path, Path::new("/dev/full"));
+        if addresses_only {
+            command.args(["--address-totals", "--addresses-only"]);
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("No space left on device"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("Total UTXOs"));
+    }
 }
 
 #[test]
@@ -422,6 +425,225 @@ fn totals_match_nonempty_prefixes_on_both_networks() {
         let totals = fixture.totals();
         assert_eq!(totals.len(), 1);
         assert_eq!(totals.get(expected_address), Some(&101));
+    }
+}
+
+#[test]
+fn minimum_balance_is_inclusive_and_applies_after_aggregation() {
+    let fixture = TestDatabase::new(true);
+    let shared_address = "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH";
+
+    for prefix in ["", "1Bg"] {
+        for minimum in ["101", "102"] {
+            let output = fixture
+                .command()
+                .args([
+                    "--quiet",
+                    "--address-totals",
+                    "--include-p2pk",
+                    "--prefix",
+                    prefix,
+                    "--min-amount",
+                    minimum,
+                ])
+                .output()
+                .unwrap();
+            assert_success(&output);
+            let totals = fixture.totals();
+            if minimum == "101" {
+                assert_eq!(totals.get(shared_address), Some(&101));
+            } else {
+                assert!(!totals.contains_key(shared_address));
+            }
+            assert!(totals
+                .values()
+                .all(|amount| *amount >= minimum.parse().unwrap()));
+            if !prefix.is_empty() {
+                assert_eq!(totals.len(), usize::from(minimum == "101"));
+            }
+        }
+    }
+}
+
+#[test]
+fn addresses_only_writes_plain_text_with_inclusive_million_satoshi_minimum() {
+    let fixture = TestDatabase::new(true);
+    let output_path = fixture.output_path.with_extension("txt");
+    for testnet in [false, true] {
+        let expected_addresses = if testnet {
+            [
+                "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+                "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7",
+                "tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq47zagq",
+            ]
+        } else {
+            [
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+                "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3",
+                "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0",
+            ]
+        };
+        for prefix in ["", if testnet { "tb1q" } else { "bc1q" }] {
+            let mut command = dump_command(&fixture.database_path, &output_path);
+            command.args([
+                "--quiet",
+                "--address-totals",
+                "--addresses-only",
+                "--min-amount",
+                "1000000",
+                "--prefix",
+                prefix,
+                "--fields",
+                "ignored",
+            ]);
+            if testnet {
+                command.arg("--testnet");
+            }
+            assert_success(&command.output().unwrap());
+
+            let contents = fs::read_to_string(&output_path).unwrap();
+            assert!(contents.ends_with('\n'));
+            let mut actual: Vec<_> = contents.lines().collect();
+            let mut expected: Vec<_> = expected_addresses
+                .iter()
+                .copied()
+                .filter(|address| address.starts_with(prefix))
+                .collect();
+            actual.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn addresses_only_without_a_minimum_lists_each_address_once() {
+    let fixture = TestDatabase::new(true);
+    let output = fixture
+        .command()
+        .args([
+            "--quiet",
+            "--address-totals",
+            "--addresses-only",
+            "--include-p2pk",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let contents = fs::read_to_string(&fixture.output_path).unwrap();
+    let mut addresses: Vec<_> = contents.lines().collect();
+    assert_eq!(addresses.len(), 8);
+    addresses.sort_unstable();
+    addresses.dedup();
+    assert_eq!(addresses.len(), 8);
+    assert!(addresses.contains(&"1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"));
+}
+
+#[test]
+fn sorted_totals_and_address_lists_preserve_balances_and_filters_on_both_networks() {
+    let fixture = TestDatabase::new(true);
+    for testnet in [false, true] {
+        let mut balances = BTreeMap::new();
+        for coin in COINS {
+            let address = if testnet {
+                coin.testnet_address
+            } else {
+                coin.mainnet_address
+            };
+            if let Some(address) = address {
+                *balances.entry(address).or_insert(0u64) += coin.amount;
+            }
+        }
+
+        for prefix in ["", if testnet { "m" } else { "1" }] {
+            for order in ["address", "amount"] {
+                let mut expected: Vec<_> = balances
+                    .iter()
+                    .filter(|(address, amount)| address.starts_with(prefix) && **amount >= 101)
+                    .collect();
+                if order == "amount" {
+                    expected.sort_by_key(|(_, amount)| std::cmp::Reverse(**amount));
+                }
+
+                for addresses_only in [false, true] {
+                    let mut command = fixture.command();
+                    command.args([
+                        "--quiet",
+                        "--address-totals",
+                        "--include-p2pk",
+                        "--min-amount",
+                        "101",
+                        "--prefix",
+                        prefix,
+                        "--sort",
+                        order,
+                    ]);
+                    if testnet {
+                        command.arg("--testnet");
+                    }
+                    if addresses_only {
+                        command.arg("--addresses-only");
+                    }
+                    assert_success(&command.output().unwrap());
+
+                    let mut expected_output = if addresses_only {
+                        String::new()
+                    } else {
+                        "address,amount\n".to_owned()
+                    };
+                    for (address, amount) in &expected {
+                        expected_output.push_str(address);
+                        if !addresses_only {
+                            expected_output.push(',');
+                            expected_output.push_str(&amount.to_string());
+                        }
+                        expected_output.push('\n');
+                    }
+                    assert_eq!(
+                        fs::read_to_string(&fixture.output_path).unwrap(),
+                        expected_output,
+                        "testnet={testnet}, prefix={prefix:?}, order={order}, addresses_only={addresses_only}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_minimum_above_every_balance_produces_an_empty_list_or_csv_header() {
+    let fixture = TestDatabase::new(true);
+    let minimum = u64::MAX.to_string();
+    for addresses_only in [false, true] {
+        for (prefix, order) in [
+            ("", None),
+            ("bc1q", None),
+            ("", Some("address")),
+            ("bc1q", Some("amount")),
+        ] {
+            let mut command = fixture.command();
+            command.args([
+                "--quiet",
+                "--address-totals",
+                "--min-amount",
+                &minimum,
+                "--prefix",
+                prefix,
+            ]);
+            if addresses_only {
+                command.arg("--addresses-only");
+            }
+            if let Some(order) = order {
+                command.args(["--sort", order]);
+            }
+            assert_success(&command.output().unwrap());
+            let expected = if addresses_only {
+                ""
+            } else {
+                "address,amount\n"
+            };
+            assert_eq!(fs::read_to_string(&fixture.output_path).unwrap(), expected);
+        }
     }
 }
 

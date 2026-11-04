@@ -33,14 +33,28 @@ impl Write for FailingWriter {
 }
 
 #[test]
-fn csv_and_totals_exports_propagate_data_row_write_failures() {
-    for address_totals in [false, true] {
+fn csv_totals_and_address_lists_propagate_data_row_write_failures() {
+    for (address_totals, addresses_only, sort) in [
+        (false, false, None),
+        (true, false, None),
+        (true, true, None),
+        (true, false, Some("address")),
+        (true, true, Some("amount")),
+    ] {
         let mut arguments = vec!["dump", "--quiet", "--fields", "count,amount"];
         if address_totals {
             arguments.push("--address-totals");
         }
+        if addresses_only {
+            arguments.push("--addresses-only");
+        }
+        if let Some(order) = sort {
+            arguments.extend(["--sort", order]);
+        }
         let cli = Cli::try_parse_from(arguments).unwrap();
-        let header = if address_totals {
+        let header = if addresses_only {
+            ""
+        } else if address_totals {
             "address,amount\n"
         } else {
             "count,amount\n"

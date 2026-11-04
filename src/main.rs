@@ -44,7 +44,9 @@ fn export_utxos(
     let mut output = CsvOutput::new(cli);
 
     if cli.address_totals {
-        writer.write_record(["address", "amount"])?;
+        if !cli.addresses_only {
+            writer.write_record(["address", "amount"])?;
+        }
     } else {
         writer.write_record(cli.fields.headers())?;
     }
@@ -83,7 +85,7 @@ fn export_utxos(
     }
 
     if cli.address_totals {
-        address_totals.write_csv(cli.testnet, writer)?;
+        address_totals.write_output(cli, writer)?;
     }
     Ok(utxo_count)
 }

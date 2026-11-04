@@ -1,4 +1,5 @@
 mod address;
+mod address_totals;
 mod btc_leveldb;
 mod chainstate;
 mod cli;

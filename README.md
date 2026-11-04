@@ -61,16 +61,21 @@ Dumps Bitcoin Core chainstate UTXO set to CSV
 Usage: btc-utxo-dump-rs [OPTIONS]
 
 Options:
-  -d, --db <DIR>           Bitcoin Core chainstate LevelDB directory [default: ~/.bitcoin/chainstate/]
-  -o, --output <FILE>      Output CSV file path [default: utxodump.csv]
-  -f, --fields <FIELDS>    Comma-separated list of fields to include in output: count,txid,vout,height,coinbase,amount,nsize,script,type,address [default: count,txid,vout,amount,type,address]
-      --testnet            Use testnet network parameters
-  -v, --verbose            Print UTXOs to stdout while processing
-  -m, --max-utxos <COUNT>  Maximum number of UTXOs to process (0 for unlimited) [default: 0]
-  -q, --quiet              Quiet mode, no output
-      --include-p2pk       Convert P2PK scripts to addresses
-  -h, --help               Print help
-  -V, --version            Print version
+  -d, --db <DIR>               Bitcoin Core chainstate LevelDB directory [default: ~/.bitcoin/chainstate/]
+  -o, --output <FILE>          Output file path [default: utxodump.csv]
+  -a, --address-totals         Sums totals for each address. If used, the --fields option is ignored.
+      --min-amount <SATOSHIS>  Only output addresses with a summed balance of at least this many satoshis [default: 0]
+      --addresses-only         Write one address per line, without a header or amounts
+      --sort <SORT>            Sort totals by address (A-Z) or amount (highest first); ties by address [possible values: address, amount]
+  -p, --prefix <PREFIX>        Used with --address-totals. Only include UTXOs for addresses starting with this prefix. [default: ""]
+  -f, --fields <FIELDS>        Comma-separated list of fields to include in output: count,txid,vout,height,coinbase,amount,nsize,script,type,address [default: count,txid,vout,amount,type,address]
+      --testnet                Use testnet network parameters
+  -v, --verbose                Print UTXOs to stdout while processing
+  -m, --max-utxos <COUNT>      Maximum number of UTXOs to process (0 for unlimited) [default: 0]
+  -q, --quiet                  Quiet mode, no output
+      --include-p2pk           Convert P2PK scripts to addresses
+  -h, --help                   Print help
+  -V, --version                Print version
 ```
 
 Available fields:

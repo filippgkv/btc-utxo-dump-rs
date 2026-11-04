@@ -1,7 +1,15 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
 use super::fields::FieldSelection;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum AddressSort {
+    #[value(alias = "alphabetical")]
+    Address,
+    #[value(alias = "value")]
+    Amount,
+}
 
 #[derive(Parser)]
 #[command(
@@ -25,7 +33,7 @@ struct RawCli {
         long,
         value_name = "FILE",
         default_value = "utxodump.csv",
-        help = "Output CSV file path"
+        help = "Output file path"
     )]
     output: PathBuf,
 
@@ -36,6 +44,30 @@ struct RawCli {
         default_value = "false"
     )]
     address_totals: bool,
+
+    #[arg(
+        long,
+        value_name = "SATOSHIS",
+        default_value = "0",
+        requires = "address_totals",
+        help = "Only output addresses with a summed balance of at least this many satoshis"
+    )]
+    min_amount: u64,
+
+    #[arg(
+        long,
+        requires = "address_totals",
+        help = "Write one address per line, without a header or amounts"
+    )]
+    addresses_only: bool,
+
+    #[arg(
+        long,
+        value_enum,
+        requires = "address_totals",
+        help = "Sort totals by address (A-Z) or amount (highest first); ties by address"
+    )]
+    sort: Option<AddressSort>,
 
     #[arg(
         short,
@@ -90,6 +122,9 @@ pub struct Cli {
     pub db: PathBuf,
     pub output: PathBuf,
     pub address_totals: bool,
+    pub min_amount: u64,
+    pub addresses_only: bool,
+    pub sort: Option<AddressSort>,
     pub prefix: String,
     pub fields: FieldSelection,
     pub testnet: bool,
@@ -110,6 +145,9 @@ impl Cli {
             db: raw.db,
             output: raw.output,
             address_totals: raw.address_totals,
+            min_amount: raw.min_amount,
+            addresses_only: raw.addresses_only,
+            sort: raw.sort,
             prefix: raw.prefix,
             fields,
             testnet: raw.testnet,
