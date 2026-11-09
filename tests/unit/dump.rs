@@ -1,10 +1,11 @@
 use csv::Writer;
 
 use super::support::encode_varint;
+use crate::address_totals::AddressTotals;
 use crate::bitcoin::address::hash160_to_address;
 use crate::bitcoin::chainstate::{deobfuscate_value, ChainStateKey};
+use crate::dump::{add_utxo_amount, export_utxos, OBFUSCATION_KEY_PREFIX, UTXO_PREFIX};
 use crate::utils::cli::Cli;
-use crate::{add_utxo_amount, export_utxos, AddressTotals, OBFUSCATION_KEY_PREFIX, UTXO_PREFIX};
 use db_key::Key;
 
 const OBFUSCATION_KEY: [u8; 8] = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
@@ -210,7 +211,7 @@ fn invalid_metadata_and_utxo_values_return_contextual_errors() {
 fn address_totals_reject_overflow() {
     for prefix in ["", "1"] {
         let cli = Cli::try_parse_from(["dump", "--address-totals", "--prefix", prefix]).unwrap();
-        let mut totals = AddressTotals::new(prefix);
+        let mut totals = AddressTotals::new(&cli.address_filter);
         // This compressed amount represents 10^19 satoshis: each value fits u64,
         // but summing two of them does not.
         let mut value = encode_varint(201);

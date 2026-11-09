@@ -5,10 +5,9 @@ use db_key::Key;
 
 use super::fixtures::COINS;
 use crate::bitcoin::chainstate::ChainStateKey;
-use crate::export_utxos;
+use crate::dump::export_utxos;
 use crate::utils::cli::Cli;
 
-/// Accept a header, then fail while the exporter writes a data row.
 struct FailingWriter {
     remaining_bytes: usize,
 }

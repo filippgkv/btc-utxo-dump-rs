@@ -1,6 +1,59 @@
 use crate::utils::cli::{AddressSort, Cli};
 
 #[test]
+fn classifies_address_family_prefixes_for_the_selected_network() {
+    use crate::address_filter::{AddressFilter, AddressTypes};
+
+    for (prefix, testnet, types) in [
+        ("1", false, AddressTypes::P2PKH),
+        ("3", false, AddressTypes::P2SH),
+        ("bc1q", false, AddressTypes::WitnessV0),
+        ("bc1p", false, AddressTypes::P2TR),
+        ("2", true, AddressTypes::P2SH),
+        ("tb1q", true, AddressTypes::WitnessV0),
+        ("tb1p", true, AddressTypes::P2TR),
+    ] {
+        for network in [false, true] {
+            let mut args = vec!["dump", "--address-totals", "--prefix", prefix];
+            if network {
+                args.push("--testnet");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let expected = if network == testnet {
+                types
+            } else {
+                AddressTypes::None
+            };
+            assert_eq!(cli.address_filter, AddressFilter::Types(expected));
+        }
+    }
+    for testnet in [false, true] {
+        assert_eq!(
+            AddressFilter::classify(String::new(), testnet),
+            AddressFilter::Types(AddressTypes::All)
+        );
+        for prefix in [
+            "11",
+            "1Bg",
+            "3C",
+            "bc1",
+            "bc1qw",
+            "bc1p0xl",
+            "tb1qw",
+            "m",
+            "n",
+            "BC1Q",
+            "unmatched",
+        ] {
+            assert_eq!(
+                AddressFilter::classify(prefix.to_owned(), testnet),
+                AddressFilter::Text(prefix.to_owned())
+            );
+        }
+    }
+}
+
+#[test]
 fn field_whitespace_is_handled_consistently() {
     let cli = Cli::try_parse_from(["dump", "--fields", " count , amount , vout "]).unwrap();
     let indices = cli.fields.indices();

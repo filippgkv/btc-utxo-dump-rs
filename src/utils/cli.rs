@@ -2,6 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
 use super::fields::FieldSelection;
+use crate::address_filter::AddressFilter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum AddressSort {
@@ -125,7 +126,7 @@ pub struct Cli {
     pub min_amount: u64,
     pub addresses_only: bool,
     pub sort: Option<AddressSort>,
-    pub prefix: String,
+    pub(crate) address_filter: AddressFilter,
     pub fields: FieldSelection,
     pub testnet: bool,
     pub verbose: bool,
@@ -141,6 +142,7 @@ impl Cli {
         } else {
             raw.fields.parse()?
         };
+        let address_filter = AddressFilter::classify(raw.prefix, raw.testnet);
         Ok(Self {
             db: raw.db,
             output: raw.output,
@@ -148,7 +150,7 @@ impl Cli {
             min_amount: raw.min_amount,
             addresses_only: raw.addresses_only,
             sort: raw.sort,
-            prefix: raw.prefix,
+            address_filter,
             fields,
             testnet: raw.testnet,
             verbose: raw.verbose,
